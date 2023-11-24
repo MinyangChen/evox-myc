@@ -67,9 +67,7 @@ class DE(ex.Algorithm):
 
     def ask(self, state):
         key, R_key = jax.random.split(state.key, 2)
-
         indices = jnp.arange(self.batch_size) + state.start_index
-
         choice_keys = jax.random.split(R_key, self.batch_size)
         random_choices = vmap(
             partial(

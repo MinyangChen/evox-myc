@@ -185,10 +185,10 @@ class Stateful(metaclass=MetaStatefulModule):
         return State()
 
     def _recursive_init(self, key, node_id) -> Tuple[State, int]:
-        if hasattr(self, "_node_id") and self._node_id is not None:
-            warnings.warn(
-                "Trying to re-initialize a Stateful module that is already initialized"
-            )
+        # if hasattr(self, "_node_id") and self._node_id is not None:
+        #     warnings.warn(
+        #         "Trying to re-initialize a Stateful module that is already initialized"
+        #     )
 
         self._node_id = node_id
 

@@ -6,19 +6,20 @@ import jax.numpy as jnp
 import time
  
 func_list = jnp.arange(12) + 1
-# func_list = [4, 8]
+func_list = [10]
 D = 20
-steps = 9999999
+# steps = 11500000
+# steps = 6800000
 pop_size = 100
 # key_start = 42
-key_start_list = jnp.arange(33)# +5 # 33
+key_start_list = jnp.arange(3)# +5 # 33
 max_time = 60   ## 10D:30, 20D:60
 
-optimizer =algorithms.DE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, base_vector="rand", num_difference_vectors=1, )
+# optimizer =algorithms.DE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, base_vector="rand", num_difference_vectors=1, )
 # optimizer =algorithms.SaDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 # optimizer =algorithms.JaDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 # optimizer =algorithms.CoDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
-# optimizer =algorithms.ParamDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
+optimizer =algorithms.SHADE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 
 
 for txt_name in ['experiment/result_de.txt', 'experiment/result_de_history.txt']:
@@ -26,8 +27,7 @@ for txt_name in ['experiment/result_de.txt', 'experiment/result_de_history.txt']
             f.write(f'Problem_Dim: {D}, ')
             f.write(f'Time: {max_time}, ')
             f.write(f'Op timizer: {type(optimizer).__name__}, ')
-            f.write(f'Popsize: {pop_size}, ')
-            f.write(f'Iters: {steps}\n\n')
+            f.write(f'Popsize: {pop_size}\n\n')
 
 """Run the algorithm"""
 time_all = jnp.array([])
@@ -38,7 +38,19 @@ for func_num in func_list:
     with open('experiment/result_de.txt', 'a') as f:
         f.write(f'{type(problem).__name__}  ')
     key = jax.random.PRNGKey(42)
-    # key = jax.random.split(key)
+    
+    # if func_num == 2:
+    #     steps = 6800000
+    # elif func_num == 8:
+    #     steps = 5400000
+    # else:
+    #     steps = 4700000
+    if func_num == 2:
+        steps = 11500000
+    elif func_num == 8:
+        steps = 9040000
+    else:
+        steps = 6960000
 
     for key_start in key_start_list:
         start_time = time.time() 
@@ -58,23 +70,21 @@ for func_num in func_list:
             steps_iter = i + 1
             end_time = time.time() 
             elapsed_time = end_time - start_time   
-            if elapsed_time >= max_time:
-                break
         print(f"min fitness: {monitor.get_min_fitness()}")
         print(f"Steps: {steps_iter}")
         print(f"Time: {elapsed_time} s")
 
         """Print and record"""
-        if key_start >= 2:
-            fitness_final = state.get_child_state("algorithm").fitness
-            best_ids = jnp.argmin(fitness_final)
-            best_fit = fitness_final[best_ids]
-            history = monitor.get_history()
-            pop_final = state.get_child_state("algorithm").population
-            best_solution = pop_final[best_ids]
 
-            with open('experiment/result_de.txt', 'a') as f:
-                f.write(f'{best_fit} ')
+        fitness_final = state.get_child_state("algorithm").fitness
+        best_ids = jnp.argmin(fitness_final)
+        best_fit = fitness_final[best_ids]
+        history = monitor.get_history()
+        pop_final = state.get_child_state("algorithm").population
+        best_solution = pop_final[best_ids]
+
+        with open('experiment/result_de.txt', 'a') as f:
+            f.write(f'{best_fit} ')
     FEs = steps_iter * pop_size
     with open('experiment/result_de.txt', 'a') as f:
         f.write(f'{FEs}')

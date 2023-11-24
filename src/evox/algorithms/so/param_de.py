@@ -39,7 +39,6 @@ class ParamDE(Algorithm):
         self.lb = lb
         self.ub = ub
         self.pop_size = pop_size
-        # batch_size：1-popsize, and pop_size % batch_size == 0
         self.batch_size = pop_size      
         self.cross_probability = cross_probability
         self.differential_weight = differential_weight
@@ -55,8 +54,15 @@ class ParamDE(Algorithm):
         fitness = jnp.full((self.pop_size,), jnp.inf)
         trial_vectors = jnp.zeros(shape=(self.batch_size, self.dim))
         best_index = 0
-        start_index = 0     # The index of the individual currently operating
-        
+        start_index = 0  
+        params_init = {
+            "differential_weight": self.differential_weight,
+            "cross_probability": self.cross_probability,
+            "basevect_prim_type": self.basevect_prim_type,
+            "basevect_sec_type": self.basevect_sec_type,
+            "num_diff_vects": self.num_diff_vects,
+            "cross_strategy": self.cross_strategy,
+        }
         return State(
             population=population,
             fitness=fitness,
@@ -64,16 +70,15 @@ class ParamDE(Algorithm):
             start_index=start_index,
             key=state_key,
             trial_vectors=trial_vectors,
+            params=params_init,
         )
 
     def ask(self, state):
-        # Unlike traditional DE, this DE can mutate/crossover batch_size solutions at one time, 
-        # and the batch_size is between 1 and popsize.
         key, ask_one_key = jax.random.split(state.key, 2) 
         ask_one_keys = jax.random.split(ask_one_key, self.batch_size)
         indices = jnp.arange(self.batch_size) + state.start_index    
 
-        trial_vectors = vmap(partial(self._ask_one, state_inner = state,) )(ask_one_key=ask_one_keys, index=indices)
+        trial_vectors = vmap(partial(self._ask_one, state_inner = state))(ask_one_key=ask_one_keys, index=indices)
         
         return trial_vectors, state.update(trial_vectors=trial_vectors, key=key) 
     
@@ -83,13 +88,14 @@ class ParamDE(Algorithm):
         population = state_inner.population
         best_index = state_inner.best_index
         fitness = state_inner.fitness
+        params = state_inner.params
         
         """Mutation: base_vect + F * difference_sum"""
-        # difference_sum, rand_vect_idx = diff_sum(self.num_diff_vects, select_key, self.pop_size, self.diff_padding_num, index, population)
+
         difference_sum, rand_vect_idx = de_diff_sum(
             select_key,
             self.diff_padding_num,
-            self.num_diff_vects,
+            params["num_diff_vects"],
             index,
             population,
         )
@@ -100,12 +106,12 @@ class ParamDE(Algorithm):
         current_vect = population[index]
         vector_merge = jnp.stack((rand_vect, best_vect, pbest_vect, current_vect))
 
-        base_vector_prim = vector_merge[self.basevect_prim_type]
-        base_vector_sec = vector_merge[self.basevect_sec_type]
+        base_vector_prim = vector_merge[params["basevect_prim_type"]]
+        base_vector_sec = vector_merge[params["basevect_sec_type"]]
 
-        base_vector = base_vector_prim + self.differential_weight * (base_vector_sec - base_vector_prim)
+        base_vector = base_vector_prim + params["differential_weight"] * (base_vector_sec - base_vector_prim)
 
-        mutation_vector = (base_vector + difference_sum * self.differential_weight)
+        mutation_vector = (base_vector + difference_sum * params["differential_weight"])
 
         """Crossover: 0 = bin, 1 = exp, 2 = arith"""
         cross_funcs = (
@@ -114,12 +120,12 @@ class ParamDE(Algorithm):
             lambda _key, x, y, z: de_arith_recom(x, y, z),
         )
         trial_vector = lax.switch(
-            self.cross_strategy,
+            params["cross_strategy"],
             cross_funcs,
             crossover_key,
             mutation_vector,
             current_vect,
-            self.cross_probability,
+            params["cross_probability"],
         )
 
         trial_vector = jnp.clip(trial_vector, self.lb, self.ub)
@@ -156,3 +162,7 @@ class ParamDE(Algorithm):
             best_index=best_index,
             start_index=start_index,
         )
+
+    def override(self, state, key, params):
+        state = state | ParamDE.setup(self, key)
+        return state.update(params=params)
