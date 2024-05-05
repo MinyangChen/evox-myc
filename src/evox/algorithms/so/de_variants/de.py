@@ -37,7 +37,7 @@ class DE(Algorithm):
         self.ub = ub
         self.pop_size = pop_size
         self.base_vector = base_vector
-        self.batch_size = batch_size
+        self.batch_size = pop_size
         self.replace = replace
         self.cross_probability = cross_probability
         self.differential_weight = differential_weight
@@ -64,7 +64,7 @@ class DE(Algorithm):
             best_index=best_index,
             start_index=start_index,
             key=state_key,
-            trial_vectors=jnp.empty((self.batch_size, self.dim)),
+            trial_vectors=jnp.empty((self.pop_size, self.dim)),
         )
 
     def ask(self, state):
@@ -157,6 +157,7 @@ class DE(Algorithm):
             state.fitness, fitness_update, start_index, axis=0
         )
         best_index = jnp.argmin(fitness)
+
         start_index = (state.start_index + self.batch_size) % self.pop_size
         return state.update(
             population=population,
@@ -164,3 +165,4 @@ class DE(Algorithm):
             best_index=best_index,
             start_index=start_index,
         )
+        
