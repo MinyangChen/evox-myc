@@ -5,34 +5,13 @@ from evox import Algorithm, jit_class, State
 from evox.operators.selection import select_rand_pbest
 from evox.operators.crossover import (
     de_diff_sum,
+    de_diff_sum_archive,
     de_arith_recom,
     de_bin_cross,
     de_exp_cross,
 )
 
 from functools import partial
-
-
-def get_success_delta(i, S_F_CR_delta, F_vect, CR_vect, compare, deltas):
-    S_F, S_CR, S_delta = S_F_CR_delta
-    is_success = compare[i]
-    F = F_vect[i]
-    CR = CR_vect[i]
-    delta = deltas[i]
-
-    S_F_update_temp = jnp.roll(S_F, shift=1)
-    S_F_update = S_F_update_temp.at[0].set(F)
-    S_CR_update_temp = jnp.roll(S_CR, shift=1)
-    S_CR_update = S_CR_update_temp.at[0].set(CR)
-    S_delta_update_temp = jnp.roll(S_delta, shift=1)
-    S_delta_update = S_delta_update_temp.at[0].set(delta)
-
-    S_F = lax.select(is_success, S_F_update, S_F_update_temp)
-    S_CR = lax.select(is_success, S_CR_update, S_CR_update_temp)
-    S_delta = lax.select(is_success, S_delta_update, S_delta_update_temp)
-
-    return (S_F, S_CR, S_delta)
-
 
 @jit_class
 class SHADE(Algorithm):
@@ -48,6 +27,7 @@ class SHADE(Algorithm):
         ub,
         pop_size=100,
         diff_padding_num=9,
+        with_archive=1,
     ):
         self.dim = lb.shape[0]
         self.lb = lb
@@ -58,6 +38,7 @@ class SHADE(Algorithm):
         self.H = pop_size
 
         self.num_diff_vects = 1
+        self.with_archive = with_archive
 
     def setup(self, key):
         state_key, init_key = jax.random.split(key, 2)
@@ -75,9 +56,11 @@ class SHADE(Algorithm):
             start_index=start_index,
             key=state_key,
             trial_vectors=trial_vectors,
-            Memory_FCR=jnp.full(shape=(2, 100), fill_value=0.5),
+            Memory_F=jnp.full(shape=(100,), fill_value=0.5),
+            Memory_CR=jnp.full(shape=(100,), fill_value=0.5),
             F_vect=jnp.empty(self.pop_size),
             CR_vect=jnp.empty(self.pop_size),
+            archive=population,
         )
 
     def ask(self, state):
@@ -88,14 +71,14 @@ class SHADE(Algorithm):
         FCR_ids = jax.random.choice(
             choice_key, a=self.H, shape=(self.batch_size,), replace=True
         )
-        M_F_vect = state.Memory_FCR[0, FCR_ids]
-        M_CR_vect = state.Memory_FCR[1, FCR_ids]
+        M_F_vect = state.Memory_F[FCR_ids]
+        M_CR_vect = state.Memory_CR[FCR_ids]
 
         # Generare F and CR
-        F_vect = jax.random.normal(F_key, shape=(self.pop_size,)) * 0.1 + M_F_vect
+        F_vect = jax.random.cauchy(F_key, shape=(self.pop_size,)) * 0.1 + M_F_vect
         F_vect = jnp.clip(F_vect, jnp.zeros(self.pop_size), jnp.ones(self.pop_size))
 
-        CR_vect = jax.random.cauchy(CR_key, shape=(self.pop_size,)) * 0.1 + M_CR_vect
+        CR_vect = jax.random.normal(CR_key, shape=(self.pop_size,)) * 0.1 + M_CR_vect
         CR_vect = jnp.clip(CR_vect, jnp.zeros(self.pop_size), jnp.ones(self.pop_size))
 
         trial_vectors = vmap(
@@ -118,13 +101,23 @@ class SHADE(Algorithm):
         differential_weight = F
         cross_probability = CR
 
-        difference_sum, _rand_vect_idx = de_diff_sum(
-            select_key,
-            self.diff_padding_num,
-            self.num_diff_vects,
-            index,
-            population,
-        )
+        if self.with_archive:
+            difference_sum, _rand_vect_idx = de_diff_sum_archive(
+                select_key,
+                self.diff_padding_num,
+                self.num_diff_vects,
+                index,
+                population,
+                state_inner.archive,
+            )
+        else:
+            difference_sum, _rand_vect_idx = de_diff_sum(
+                select_key,
+                self.diff_padding_num,
+                self.num_diff_vects,
+                index,
+                population,
+            )
 
         pbest_vect = select_rand_pbest(pbest_key, 0.05, population, fitness)
         current_vect = population[index]
@@ -158,7 +151,7 @@ class SHADE(Algorithm):
             state.fitness, start_index, self.batch_size, axis=0
         )
 
-        compare = trial_fitness < batch_fitness
+        compare = trial_fitness <= batch_fitness
 
         population_update = jnp.where(
             compare[:, jnp.newaxis], state.trial_vectors, batch_pop
@@ -174,44 +167,44 @@ class SHADE(Algorithm):
         best_index = jnp.argmin(fitness)
         start_index = (state.start_index + self.batch_size) % self.pop_size
 
-        # Update S_F and S_CR
+        """Update Memory_F and Memory_CR:
+        Each generation's successful F and CR values are recorded, and the unsuccessful ones are not. 
+        Calculate the mean of the recorded F and CR values (F uses a weighted Lehmer mean, and CR uses a weighted arithmetic mean), 
+        and store them in two archive tables (Memory_F and Memory_CR)."""
         S_F_init = jnp.full(shape=(self.pop_size,), fill_value=jnp.nan)
         S_CR_init = jnp.full(shape=(self.pop_size,), fill_value=jnp.nan)
         S_delta_init = jnp.full(shape=(self.pop_size,), fill_value=jnp.nan)
-
         deltas = batch_fitness - trial_fitness
-        get_success_part = partial(
-            get_success_delta,
-            F_vect=state.F_vect,
-            CR_vect=state.CR_vect,
-            compare=compare,
-            deltas=deltas,
-        )
-        S_F, S_CR, S_delta = lax.fori_loop(
-            0,
-            self.pop_size,
-            body_fun=get_success_part,
-            init_val=(S_F_init, S_CR_init, S_delta_init),
-        )
+
+        compare2 = trial_fitness < batch_fitness
+        S_F = jnp.where(compare2, state.F_vect, S_F_init)
+        S_CR = jnp.where(compare2, state.CR_vect, S_CR_init)
+        S_delta = jnp.where(compare2, deltas, S_delta_init)
 
         norm_delta = S_delta / jnp.nansum(S_delta)
         M_CR = jnp.nansum(norm_delta * S_CR)
         M_F = jnp.nansum(norm_delta * (S_F**2)) / jnp.nansum(norm_delta * S_F)
 
-        Memory_FCR_update = jnp.roll(state.Memory_FCR, shift=1, axis=1)
-        Memory_FCR_update = Memory_FCR_update.at[0, 0].set(M_F)
-        Memory_FCR_update = Memory_FCR_update.at[1, 0].set(M_CR)
 
+        Memory_F_update = jnp.roll(state.Memory_F, shift=1)
+        Memory_F_update = Memory_F_update.at[0].set(M_F)
         is_F_nan = jnp.isnan(M_F)
-        Memory_FCR_update = lax.select(is_F_nan, state.Memory_FCR, Memory_FCR_update)
+        Memory_F = lax.select(is_F_nan, state.Memory_F, Memory_F_update)
 
-        is_S_nan = jnp.all(jnp.isnan(compare))
-        Memory_FCR = lax.select(is_S_nan, state.Memory_FCR, Memory_FCR_update)
+        Memory_CR_update = jnp.roll(state.Memory_CR, shift=1)
+        Memory_CR_update = Memory_CR_update.at[0].set(M_CR)
+        is_CR_nan = jnp.isnan(M_CR)
+        Memory_CR = lax.select(is_CR_nan, state.Memory_CR, Memory_CR_update)
+
+        """Update archive"""
+        archive = jnp.where(compare2[:, jnp.newaxis], state.archive, batch_pop)
 
         return state.update(
             population=population,
             fitness=fitness,
             best_index=best_index,
             start_index=start_index,
-            Memory_FCR=Memory_FCR,
+            Memory_F=Memory_F,
+            Memory_CR=Memory_CR,
+            archive=archive,
         )

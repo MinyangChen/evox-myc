@@ -5,6 +5,7 @@ import jax.numpy as jnp
 from jax import jit, lax, random
 
 from evox import jit_class
+from jax.experimental.host_callback import id_print
 
 
 def _de_mutation(x1, x2, x3, F):
@@ -50,9 +51,11 @@ class DifferentialEvolve:
 def de_diff_sum(
     key, diff_padding_num, num_diff_vects, index, population, replace=False
 ):
+    pop_size, dim = population.shape
+    subtrahend_index = jnp.arange(1, diff_padding_num, 2)
+
     """Make differences and sum"""
     # Randomly select 1 random individual (first index) and (num_diff_vects * 2) difference individuals
-    pop_size, dim = population.shape
     select_len = num_diff_vects * 2 + 1
     random_choice = jax.random.choice(
         key, pop_size, shape=(diff_padding_num,), replace=replace
@@ -66,11 +69,50 @@ def de_diff_sum(
     permut_mask = jnp.arange(diff_padding_num) < select_len
     pop_permut_padding = jnp.where(permut_mask[:, jnp.newaxis], pop_permut, 0)
 
+    # Calculate the difference
     diff_vects = pop_permut_padding[1:, :]
-    subtrahend_index = jnp.arange(1, diff_vects.shape[0], 2)
     difference_sum = jnp.sum(diff_vects.at[subtrahend_index, :].multiply(-1), axis=0)
 
     rand_vect_idx = random_choice[0]
+    return difference_sum, rand_vect_idx
+
+@partial(jit, static_argnames=["diff_padding_num", "num_diff_vects", "replace"])
+def de_diff_sum_archive(
+    key, diff_padding_num, num_diff_vects, index, population, archive, replace=False
+):
+    pop_size, dim = population.shape
+
+    """Make differences' indices'"""
+    # Randomly select 1 random individual (first index) and (num_diff_vects * 2) difference individuals' indices
+    key_select, key_archive = jax.random.split(key)
+    population_archive = jnp.vstack((population, archive))
+
+    subtrahend_ids = jax.random.choice(
+        key_select, 2 * pop_size, shape=(diff_padding_num,), replace=replace
+    )
+
+    base_ids = jax.random.choice(
+        key_select, pop_size, shape=(diff_padding_num,), replace=replace
+    )
+
+    even_ids = jnp.arange(2, diff_padding_num, 2)
+    diff_member_ids = base_ids.at[even_ids].set(subtrahend_ids[even_ids])
+
+    diff_member_ids = jnp.where(
+        diff_member_ids == index, pop_size - 1, diff_member_ids
+    )  # Ensure that selected indices != index
+
+    # Permutate indices, take the first select_len individuals of indices in the population, and set the next individuals to 0
+    pop_permut = population_archive[diff_member_ids]
+    select_len = num_diff_vects * 2 + 1
+    permut_mask = jnp.arange(diff_padding_num) < select_len
+    pop_permut_padding = jnp.where(permut_mask[:, jnp.newaxis], pop_permut, 0)
+
+    diff_vects = pop_permut_padding[1:, :]
+    subtrahend_ids_2 = jnp.arange(1, diff_padding_num, 2)
+    difference_sum = jnp.sum(diff_vects.at[subtrahend_ids_2, :].multiply(-1), axis=0)
+
+    rand_vect_idx = diff_member_ids[0]
     return difference_sum, rand_vect_idx
 
 

@@ -3,6 +3,7 @@ from .differential_evolution import (
     de_arith_recom,
     de_bin_cross,
     de_diff_sum,
+    de_diff_sum_archive,
     de_exp_cross,
     differential_evolve,
 )

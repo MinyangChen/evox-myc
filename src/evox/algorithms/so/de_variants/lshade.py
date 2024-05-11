@@ -15,12 +15,20 @@ from functools import partial
 
 from jax.experimental.host_callback import id_print
 
+
 @jit_class
-class JaDE(Algorithm):
-    """JaDE
-    Zhang J, Sanderson A C.
-    JADE: adaptive differential evolution with optional external archive[J].
-    IEEE Transactions on evolutionary computation, 2009, 13(5): 945-958.
+class LSHADE(Algorithm):
+    """
+    R. Tanabe and A. S. Fukunaga, "Improving the search performance of SHADE using linear population size reduction," 
+    2014 IEEE Congress on Evolutionary Computation (CEC), Beijing, China, 2014, pp. 1658-1665, doi: 10.1109/CEC.2014.6900380.
+
+    Compared to SHADE, there are the following improvements:
+
+    1. The population decreases with the process.
+    2. An additional cutoff condition for CR is included.
+    3. The generation of mean MCR also adopts the Lehmer mean.
+    4. The historical archive of parameter means, H, is adjusted to 5.
+    5. The repair function is replaced.
     """
 
     def __init__(
@@ -29,9 +37,6 @@ class JaDE(Algorithm):
         ub,
         pop_size=100,
         diff_padding_num=9,
-        differential_weight=None,
-        cross_probability=None,
-        c=0.1,
         with_archive=1,
     ):
         self.dim = lb.shape[0]
@@ -40,10 +45,7 @@ class JaDE(Algorithm):
         self.pop_size = pop_size
         self.diff_padding_num = diff_padding_num
         self.batch_size = pop_size
-        self.c = c
-
-        self.cross_probability = cross_probability
-        self.differential_weight = differential_weight
+        self.H = 5
 
         self.num_diff_vects = 1
         self.with_archive = with_archive
@@ -64,23 +66,33 @@ class JaDE(Algorithm):
             start_index=start_index,
             key=state_key,
             trial_vectors=trial_vectors,
-            F_u=0.5,
-            CR_u=0.5,
+            Memory_F=jnp.full(shape=(100,), fill_value=0.5),
+            Memory_CR=jnp.full(shape=(100,), fill_value=0.5),
             F_vect=jnp.empty(self.pop_size),
             CR_vect=jnp.empty(self.pop_size),
             archive=population,
+            CR_cutoff=0,
         )
 
     def ask(self, state):
-        key, ask_one_key, F_key, CR_key = jax.random.split(state.key, 4)
+        key, ask_one_key, choice_key, F_key, CR_key = jax.random.split(state.key, 5)
         ask_one_keys = jax.random.split(ask_one_key, self.batch_size)
         indices = jnp.arange(self.batch_size) + state.start_index
 
+        FCR_ids = jax.random.choice(
+            choice_key, a=self.H, shape=(self.batch_size,), replace=True
+        )
+        M_F_vect = state.Memory_F[FCR_ids]
+        M_CR_vect = state.Memory_CR[FCR_ids]
+
         # Generare F and CR
-        F_vect = jax.random.cauchy(F_key, shape=(self.pop_size,)) * 0.1 + state.F_u
+        F_vect = jax.random.cauchy(F_key, shape=(self.pop_size,)) * 0.1 + M_F_vect
         F_vect = jnp.clip(F_vect, jnp.zeros(self.pop_size), jnp.ones(self.pop_size))
-        CR_vect = jax.random.normal(CR_key, shape=(self.pop_size,)) * 0.1 + state.CR_u
+
+        CR_vect = jax.random.normal(CR_key, shape=(self.pop_size,)) * 0.1 + M_CR_vect
         CR_vect = jnp.clip(CR_vect, jnp.zeros(self.pop_size), jnp.ones(self.pop_size))
+
+        CR_vect = lax.select(state.CR_cutoff, jnp.zeros(self.pop_size), CR_vect)
 
         trial_vectors = vmap(
             partial(
@@ -99,8 +111,8 @@ class JaDE(Algorithm):
         population = state_inner.population
         fitness = state_inner.fitness
 
-        self.differential_weight = F
-        self.cross_probability = CR
+        differential_weight = F
+        cross_probability = CR
 
         if self.with_archive:
             difference_sum, _rand_vect_idx = de_diff_sum_archive(
@@ -126,20 +138,27 @@ class JaDE(Algorithm):
         base_vector_prim = current_vect
         base_vector_sec = pbest_vect
 
-        base_vector = base_vector_prim + self.differential_weight * (
+        base_vector = base_vector_prim + differential_weight * (
             base_vector_sec - base_vector_prim
         )
 
-        mutation_vector = base_vector + difference_sum * self.differential_weight
+        mutation_vector = base_vector + difference_sum * differential_weight
 
         trial_vector = de_bin_cross(
             crossover_key,
             mutation_vector,
             current_vect,
-            self.cross_probability,
+            cross_probability,
         )
 
-        trial_vector = jnp.clip(trial_vector, self.lb, self.ub)
+        # The new repair function
+        compare_min = trial_vector < self.lb
+        repair_min = (current_vect + self.lb) / 2
+        trial_vector = jnp.where(compare_min, repair_min, trial_vector)
+
+        compare_max = trial_vector > self.ub
+        repair_max = (current_vect + self.ub) / 2
+        trial_vector = jnp.where(compare_max, repair_max, trial_vector)
 
         return trial_vector
 
@@ -152,7 +171,7 @@ class JaDE(Algorithm):
             state.fitness, start_index, self.batch_size, axis=0
         )
 
-        compare = trial_fitness < batch_fitness
+        compare = trial_fitness <= batch_fitness
 
         population_update = jnp.where(
             compare[:, jnp.newaxis], state.trial_vectors, batch_pop
@@ -168,35 +187,49 @@ class JaDE(Algorithm):
         best_index = jnp.argmin(fitness)
         start_index = (state.start_index + self.batch_size) % self.pop_size
 
-        """Update F_u and CR_u:
-        Each generation's successful F and CR values are recorded, while the unsuccessful ones are not. 
-        Update the mean values of F (F_u) and CR (CR_u) for the next generation using formulas (F uses the Lehmer mean)."""
+        """Update Memory_F and Memory_CR:
+        Each generation's successful F and CR values are recorded, and the unsuccessful ones are not. 
+        Calculate the mean of the recorded F and CR values (F uses a weighted Lehmer mean, and CR uses a weighted arithmetic mean), 
+        and store them in two archive tables (Memory_F and Memory_CR)."""
         S_F_init = jnp.full(shape=(self.pop_size,), fill_value=jnp.nan)
         S_CR_init = jnp.full(shape=(self.pop_size,), fill_value=jnp.nan)
+        S_delta_init = jnp.full(shape=(self.pop_size,), fill_value=jnp.nan)
+        deltas = batch_fitness - trial_fitness
 
-        S_F = jnp.where(compare, state.F_vect, S_F_init)
-        S_CR = jnp.where(compare, state.CR_vect, S_CR_init)
+        compare2 = trial_fitness < batch_fitness
+        S_F = jnp.where(compare2, state.F_vect, S_F_init)
+        S_CR = jnp.where(compare2, state.CR_vect, S_CR_init)
+        S_delta = jnp.where(compare2, deltas, S_delta_init)
+
+        # The cutoff condition of CR. Once it achieves, CR will be 0 to the end.
+        is_cutoff = jnp.nanmax(S_CR) <= 0
+        CR_cutoff = lax.select(is_cutoff, 1, state.CR_cutoff)
+
+        norm_delta = S_delta / jnp.nansum(S_delta)
+        M_CR = jnp.nansum(norm_delta * (S_CR**2)) / jnp.nansum(norm_delta * S_CR)
+        M_F = jnp.nansum(norm_delta * (S_F**2)) / jnp.nansum(norm_delta * S_F)
 
 
-        no_success = jnp.all(~compare)
+        Memory_F_update = jnp.roll(state.Memory_F, shift=1)
+        Memory_F_update = Memory_F_update.at[0].set(M_F)
+        is_F_nan = jnp.isnan(M_F)
+        Memory_F = lax.select(is_F_nan, state.Memory_F, Memory_F_update)
 
-        F_u_temp = (1 - self.c) * state.F_u + self.c * (
-            jnp.nansum(S_F**2) / jnp.nansum(S_F)
-        )
-        F_u = lax.select(no_success, state.F_u, F_u_temp)
-
-        CR_u_temp = (1 - self.c) * state.CR_u + self.c * jnp.nanmean(S_CR)
-        CR_u = lax.select(no_success, state.CR_u, CR_u_temp)
+        Memory_CR_update = jnp.roll(state.Memory_CR, shift=1)
+        Memory_CR_update = Memory_CR_update.at[0].set(M_CR)
+        is_CR_nan = jnp.isnan(M_CR)
+        Memory_CR = lax.select(is_CR_nan, state.Memory_CR, Memory_CR_update)
 
         """Update archive"""
-        archive = jnp.where(compare[:, jnp.newaxis], state.archive, batch_pop)
+        archive = jnp.where(compare2[:, jnp.newaxis], state.archive, batch_pop)
 
         return state.update(
             population=population,
             fitness=fitness,
             best_index=best_index,
             start_index=start_index,
-            F_u=F_u,
-            CR_u=CR_u,
+            Memory_F=Memory_F,
+            Memory_CR=Memory_CR,
             archive=archive,
+            CR_cutoff=CR_cutoff,
         )
