@@ -32,6 +32,7 @@ class JaDE(Algorithm):
         differential_weight=None,
         cross_probability=None,
         c=0.1,
+        p=0.05,
         with_archive=1,
     ):
         self.dim = lb.shape[0]
@@ -44,8 +45,9 @@ class JaDE(Algorithm):
 
         self.cross_probability = cross_probability
         self.differential_weight = differential_weight
-
         self.num_diff_vects = 1
+
+        self.p = p
         self.with_archive = with_archive
 
     def setup(self, key):
@@ -120,7 +122,7 @@ class JaDE(Algorithm):
                 population,
             )
 
-        pbest_vect = select_rand_pbest(pbest_key, 0.05, population, fitness)
+        pbest_vect = select_rand_pbest(pbest_key, self.p, population, fitness)
         current_vect = population[index]
 
         base_vector_prim = current_vect
@@ -189,7 +191,7 @@ class JaDE(Algorithm):
         CR_u = lax.select(no_success, state.CR_u, CR_u_temp)
 
         """Update archive"""
-        archive = jnp.where(compare[:, jnp.newaxis], state.archive, batch_pop)
+        archive = jnp.where(compare[:, jnp.newaxis], batch_pop, state.archive)
 
         return state.update(
             population=population,

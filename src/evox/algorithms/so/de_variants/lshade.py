@@ -236,13 +236,11 @@ class LSHADE(Algorithm):
         Memory_CR = lax.select(is_CR_nan, state.Memory_CR, Memory_CR_update)
 
         """Update archive"""
-        archive = jnp.where(compare2[:, jnp.newaxis], state.archive, state.population)
+        archive = jnp.where(compare2[:, jnp.newaxis], state.population, state.archive)
 
         """Ajust pop_size"""
         pop_size_temp = self.pop_size - (self.pop_size - self.pop_size_min) * state.progress
         pop_size_reduced = lax.select(pop_size_temp.astype(int) < self.pop_size_min, self.pop_size_min, pop_size_temp.astype(int))
-        # id_print(pop_size_reduced)
-
 
         return state.update(
             population=moved_population,

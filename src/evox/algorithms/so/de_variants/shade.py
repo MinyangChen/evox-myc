@@ -12,6 +12,7 @@ from evox.operators.crossover import (
 )
 
 from functools import partial
+from jax.experimental.host_callback import id_print
 
 @jit_class
 class SHADE(Algorithm):
@@ -28,6 +29,7 @@ class SHADE(Algorithm):
         pop_size=100,
         diff_padding_num=9,
         with_archive=1,
+        p=0.05,
     ):
         self.dim = lb.shape[0]
         self.lb = lb
@@ -36,6 +38,7 @@ class SHADE(Algorithm):
         self.diff_padding_num = diff_padding_num
         self.batch_size = pop_size
         self.H = pop_size
+        self.p = p
 
         self.num_diff_vects = 1
         self.with_archive = with_archive
@@ -61,6 +64,7 @@ class SHADE(Algorithm):
             F_vect=jnp.empty(self.pop_size),
             CR_vect=jnp.empty(self.pop_size),
             archive=population,
+            p=self.p,
         )
 
     def ask(self, state):
@@ -97,6 +101,7 @@ class SHADE(Algorithm):
 
         population = state_inner.population
         fitness = state_inner.fitness
+        p = state_inner.p
 
         differential_weight = F
         cross_probability = CR
@@ -119,9 +124,8 @@ class SHADE(Algorithm):
                 population,
             )
 
-        pbest_vect = select_rand_pbest(pbest_key, 0.05, population, fitness)
+        pbest_vect = select_rand_pbest(pbest_key, p, population, fitness)
         current_vect = population[index]
-
         base_vector_prim = current_vect
         base_vector_sec = pbest_vect
 
@@ -197,7 +201,11 @@ class SHADE(Algorithm):
         Memory_CR = lax.select(is_CR_nan, state.Memory_CR, Memory_CR_update)
 
         """Update archive"""
-        archive = jnp.where(compare2[:, jnp.newaxis], state.archive, batch_pop)
+        archive = jnp.where(compare2[:, jnp.newaxis], batch_pop, state.archive)
+
+        """Update pbest percent"""
+        p_key, _key = jax.random.split(state.key)
+        p = jax.random.uniform(p_key, minval=2 / self.pop_size, maxval=0.2)
 
         return state.update(
             population=population,
@@ -207,4 +215,5 @@ class SHADE(Algorithm):
             Memory_F=Memory_F,
             Memory_CR=Memory_CR,
             archive=archive,
+            p=p,
         )

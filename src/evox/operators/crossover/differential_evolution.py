@@ -46,6 +46,7 @@ class DifferentialEvolve:
     def __call__(self, key, p1, p2, p3):
         return differential_evolve(key, p1, p2, p3, self.F, self.CR)
 
+@jit
 def move_n_small_numbers(array, n):
     # Move the first n small numbers in the array to the first n bits of the array and the rest to the back.
     # The relative order is not changed. n can be a dynamic value.

@@ -4,15 +4,23 @@ import jax.numpy as jnp
 from jax import jit
 
 from functools import partial
+from evox.operators.crossover import move_n_small_numbers
+from jax.experimental.host_callback import id_print
 
 
-@partial(jit, static_argnums=[1])
+@jit 
 def select_rand_pbest(key, percent, population, fitness):
-    assert percent > 0 and percent <= 1.0
+    # Randomly select a member in top 100p% best individuals. p can be dynamic.
     pop_size = population.shape[0]
-    top_p_num = max(int(pop_size * percent), 1)  # The number is p,  ranges in 5% - 20%.
-    sorted_indices = jnp.argsort(fitness)
-    _topk_fit, pbest_indices = jax.lax.top_k(-fitness, top_p_num)
-    pbest_index = jax.random.choice(key, pbest_indices)
-    pbest_vect = population[pbest_index]
+    top_p_num = jnp.floor(pop_size * percent).astype(int)  # p ranges in 5% - 20%.
+
+    _moved_fitness, moved_ids = move_n_small_numbers(fitness, top_p_num)
+    moved_population = population[moved_ids]
+
+    random_ids = jax.random.choice(key, pop_size, shape=(pop_size,), replace=False)
+    moved_random_ids, _moved_ids = move_n_small_numbers(random_ids, top_p_num)
+
+    pbest_index = moved_random_ids[0]
+    pbest_vect = moved_population[pbest_index]
+
     return pbest_vect
