@@ -9,12 +9,12 @@ import jax.numpy as jnp
 import time
 
 func_list = jnp.arange(12) + 1
-# func_list = [4]
-D = 10
+# func_list = [6]
+D = 20
 steps = 9999999
 pop_size = 100
 # key_start = 42
-runs = 4 # number of independent runs. should be an even number
+runs = 2 # number of independent runs. should be an even number
 max_time = 60   ## 60
 num_samples = 100 # history sample num
 key = jax.random.PRNGKey(42)
@@ -25,6 +25,7 @@ key = jax.random.PRNGKey(42)
 # optimizer =algorithms.de_variants.CoDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 # optimizer =algorithms.de_variants.SHADE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 optimizer =algorithms.de_variants.LSHADE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
+# optimizer =algorithms.de_variants.LSDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 
 def sample_history(num_samples, fit_history):
     fit_history = jnp.array(fit_history)
@@ -59,7 +60,6 @@ for func_num in func_list:
     best_fit_all = []           # best fit of all runs
 
     for run_num in range(runs):
-        start_time = time.time() 
         monitor = StdSOMonitor(record_fit_history=False)
 
         # create a pipeline
@@ -70,15 +70,24 @@ for func_num in func_list:
         state = workflow.init(key)
 
         bestfit_history = []
+        start_time = time.time() 
         # run the pipeline for 100 steps
         for i in range(steps):
             state = workflow.step(state)
             steps_iter = i + 1
+
             bestfit_step = monitor.get_best_fitness().item() # record best fitness history
             bestfit_history.append(bestfit_step)
             # print(bestfit_step) ###
+
             end_time = time.time() 
             elapsed_time = end_time - start_time   
+
+            # Update progress into algorithm
+            progress = elapsed_time / max_time
+            alg_state = state.get_child_state("algorithm")
+            alg_state = alg_state.update(progress=progress)
+            state = state.update_child("algorithm", alg_state) 
             if elapsed_time >= max_time:
                 break
         """Record and print"""

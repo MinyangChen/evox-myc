@@ -39,6 +39,7 @@ class LSHADE(Algorithm):
         pop_size=100,
         diff_padding_num=9,
         with_archive=1,
+        pop_size_min=4,
     ):
         self.dim = lb.shape[0]
         self.lb = lb
@@ -46,10 +47,11 @@ class LSHADE(Algorithm):
         self.pop_size = pop_size
         self.diff_padding_num = diff_padding_num
         self.H = 5
-        self.p = 0.04
+        self.p = 0.1
 
         self.num_diff_vects = 1
         self.with_archive = with_archive
+        self.pop_size_min=pop_size_min
 
     def setup(self, key):
         state_key, init_key = jax.random.split(key, 2)
@@ -72,9 +74,9 @@ class LSHADE(Algorithm):
             archive=population,
             CR_cutoff=0,
 
-            iter=0,
-            pop_size_reduced=90,
+            pop_size_reduced=self.pop_size,
             worst_solution=population[0],
+            progress=0,
         )
 
     def ask(self, state):
@@ -237,13 +239,12 @@ class LSHADE(Algorithm):
         archive = jnp.where(compare2[:, jnp.newaxis], state.archive, state.population)
 
         """Ajust pop_size"""
-        iter = state.iter + 1
-        cond = iter > 100
-        pop_size_reduced = lax.select(cond, 80, state.pop_size_reduced)
+        pop_size_temp = self.pop_size - (self.pop_size - self.pop_size_min) * state.progress
+        pop_size_reduced = lax.select(pop_size_temp.astype(int) < self.pop_size_min, self.pop_size_min, pop_size_temp.astype(int))
+        # id_print(pop_size_reduced)
+
 
         return state.update(
-            # population=population,
-            # fitness=fitness,
             population=moved_population,
             fitness=moved_fitness,
             best_index=best_index,
@@ -252,7 +253,6 @@ class LSHADE(Algorithm):
             archive=archive,
             CR_cutoff=CR_cutoff,
 
-            iter=iter,
             pop_size_reduced=pop_size_reduced,
             worst_solution=worst_solution,
         )
