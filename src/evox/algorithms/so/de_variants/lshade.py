@@ -6,6 +6,7 @@ from evox.operators.selection import select_rand_pbest
 from evox.operators.crossover import (
     de_diff_sum,
     de_diff_sum_archive,
+    move_n_small_numbers,
     de_arith_recom,
     de_bin_cross,
     de_exp_cross,
@@ -44,8 +45,8 @@ class LSHADE(Algorithm):
         self.ub = ub
         self.pop_size = pop_size
         self.diff_padding_num = diff_padding_num
-        self.batch_size = pop_size
         self.H = 5
+        self.p = 0.04
 
         self.num_diff_vects = 1
         self.with_archive = with_archive
@@ -55,32 +56,34 @@ class LSHADE(Algorithm):
         population = jax.random.uniform(init_key, shape=(self.pop_size, self.dim))
         population = population * (self.ub - self.lb) + self.lb
         fitness = jnp.full((self.pop_size,), jnp.inf)
-        trial_vectors = jnp.zeros(shape=(self.batch_size, self.dim))
-        best_index = 0
-        start_index = 0
+        trial_vectors = jnp.zeros(shape=(self.pop_size, self.dim))
+        best_index = 1
 
         return State(
             population=population,
             fitness=fitness,
             best_index=best_index,
-            start_index=start_index,
             key=state_key,
             trial_vectors=trial_vectors,
-            Memory_F=jnp.full(shape=(100,), fill_value=0.5),
-            Memory_CR=jnp.full(shape=(100,), fill_value=0.5),
+            Memory_F=jnp.full(shape=(self.H,), fill_value=0.5),
+            Memory_CR=jnp.full(shape=(self.H,), fill_value=0.5),
             F_vect=jnp.empty(self.pop_size),
             CR_vect=jnp.empty(self.pop_size),
             archive=population,
             CR_cutoff=0,
+
+            iter=0,
+            pop_size_reduced=90,
+            worst_solution=population[0],
         )
 
     def ask(self, state):
         key, ask_one_key, choice_key, F_key, CR_key = jax.random.split(state.key, 5)
-        ask_one_keys = jax.random.split(ask_one_key, self.batch_size)
-        indices = jnp.arange(self.batch_size) + state.start_index
+        ask_one_keys = jax.random.split(ask_one_key, self.pop_size)
+        indices = jnp.arange(self.pop_size)
 
         FCR_ids = jax.random.choice(
-            choice_key, a=self.H, shape=(self.batch_size,), replace=True
+            choice_key, a=self.H, shape=(self.pop_size,), replace=True
         )
         M_F_vect = state.Memory_F[FCR_ids]
         M_CR_vect = state.Memory_CR[FCR_ids]
@@ -101,6 +104,10 @@ class LSHADE(Algorithm):
             )
         )(ask_one_key=ask_one_keys, index=indices, F=F_vect, CR=CR_vect)
 
+        # Replace nan solutions as worst_solution. In case of evaluating nan solution.
+        replace_mask = jnp.arange(self.pop_size) < state.pop_size_reduced
+        trial_vectors = jnp.where(replace_mask[:, jnp.newaxis], trial_vectors, state.worst_solution)
+
         return trial_vectors, state.update(
             trial_vectors=trial_vectors, key=key, F_vect=F_vect, CR_vect=CR_vect
         )
@@ -110,6 +117,7 @@ class LSHADE(Algorithm):
 
         population = state_inner.population
         fitness = state_inner.fitness
+        pop_size_reduced = state_inner.pop_size_reduced
 
         differential_weight = F
         cross_probability = CR
@@ -122,17 +130,19 @@ class LSHADE(Algorithm):
                 index,
                 population,
                 state_inner.archive,
+                pop_size_reduced,
             )
         else:
-            difference_sum, _rand_vect_idx = de_diff_sum(
+            difference_sum, rand_vect_idx = de_diff_sum(
                 select_key,
                 self.diff_padding_num,
                 self.num_diff_vects,
                 index,
                 population,
+                pop_size_reduced,
             )
 
-        pbest_vect = select_rand_pbest(pbest_key, 0.05, population, fitness)
+        pbest_vect = select_rand_pbest(pbest_key, self.p, population, fitness)
         current_vect = population[index]
 
         base_vector_prim = current_vect
@@ -143,7 +153,7 @@ class LSHADE(Algorithm):
         )
 
         mutation_vector = base_vector + difference_sum * differential_weight
-
+  
         trial_vector = de_bin_cross(
             crossover_key,
             mutation_vector,
@@ -163,29 +173,32 @@ class LSHADE(Algorithm):
         return trial_vector
 
     def tell(self, state, trial_fitness):
-        start_index = state.start_index
-        batch_pop = jax.lax.dynamic_slice_in_dim(
-            state.population, start_index, self.batch_size, axis=0
-        )
-        batch_fitness = jax.lax.dynamic_slice_in_dim(
-            state.fitness, start_index, self.batch_size, axis=0
-        )
+        trial_mask = jnp.arange(self.pop_size) < state.pop_size_reduced
+        trial_fitness = jnp.where(trial_mask, trial_fitness, jnp.inf)
 
-        compare = trial_fitness <= batch_fitness
+        compare = trial_fitness <= state.fitness
+        
+        population = jnp.where(
+            compare[:, jnp.newaxis], state.trial_vectors, state.population
+        )
+        fitness = jnp.where(compare, trial_fitness, state.fitness)
 
-        population_update = jnp.where(
-            compare[:, jnp.newaxis], state.trial_vectors, batch_pop
-        )
-        fitness_update = jnp.where(compare, trial_fitness, batch_fitness)
-
-        population = jax.lax.dynamic_update_slice_in_dim(
-            state.population, population_update, start_index, axis=0
-        )
-        fitness = jax.lax.dynamic_update_slice_in_dim(
-            state.fitness, fitness_update, start_index, axis=0
-        )
         best_index = jnp.argmin(fitness)
-        start_index = (state.start_index + self.batch_size) % self.pop_size
+
+        """Reduce population and fitness:
+        Use nan to occupy unwanted individuals in population and inf to occupy unwanted bits in fitness."""
+
+        # Set fitness[pop_size_reduced:] as inf and pop[pop_size_reduced:] as nan
+        moved_fitness, move_ids = move_n_small_numbers(fitness, state.pop_size_reduced)
+        replace_mask = jnp.arange(self.pop_size) < state.pop_size_reduced
+        moved_fitness = jnp.where(replace_mask, moved_fitness, jnp.inf)
+
+        moved_population = population[move_ids]
+        moved_population = jnp.where(replace_mask[:, jnp.newaxis], moved_population, jnp.nan)
+
+        # Record the worst solution to fill nan solution in population
+        max_index = jnp.nanargmax(fitness)
+        worst_solution = population[max_index]
 
         """Update Memory_F and Memory_CR:
         Each generation's successful F and CR values are recorded, and the unsuccessful ones are not. 
@@ -194,9 +207,9 @@ class LSHADE(Algorithm):
         S_F_init = jnp.full(shape=(self.pop_size,), fill_value=jnp.nan)
         S_CR_init = jnp.full(shape=(self.pop_size,), fill_value=jnp.nan)
         S_delta_init = jnp.full(shape=(self.pop_size,), fill_value=jnp.nan)
-        deltas = batch_fitness - trial_fitness
+        deltas = state.fitness - trial_fitness
 
-        compare2 = trial_fitness < batch_fitness
+        compare2 = trial_fitness < state.fitness
         S_F = jnp.where(compare2, state.F_vect, S_F_init)
         S_CR = jnp.where(compare2, state.CR_vect, S_CR_init)
         S_delta = jnp.where(compare2, deltas, S_delta_init)
@@ -221,15 +234,25 @@ class LSHADE(Algorithm):
         Memory_CR = lax.select(is_CR_nan, state.Memory_CR, Memory_CR_update)
 
         """Update archive"""
-        archive = jnp.where(compare2[:, jnp.newaxis], state.archive, batch_pop)
+        archive = jnp.where(compare2[:, jnp.newaxis], state.archive, state.population)
+
+        """Ajust pop_size"""
+        iter = state.iter + 1
+        cond = iter > 100
+        pop_size_reduced = lax.select(cond, 80, state.pop_size_reduced)
 
         return state.update(
-            population=population,
-            fitness=fitness,
+            # population=population,
+            # fitness=fitness,
+            population=moved_population,
+            fitness=moved_fitness,
             best_index=best_index,
-            start_index=start_index,
             Memory_F=Memory_F,
             Memory_CR=Memory_CR,
             archive=archive,
             CR_cutoff=CR_cutoff,
+
+            iter=iter,
+            pop_size_reduced=pop_size_reduced,
+            worst_solution=worst_solution,
         )

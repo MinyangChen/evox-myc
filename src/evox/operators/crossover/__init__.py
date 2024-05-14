@@ -4,6 +4,7 @@ from .differential_evolution import (
     de_bin_cross,
     de_diff_sum,
     de_diff_sum_archive,
+    move_n_small_numbers,
     de_exp_cross,
     differential_evolve,
 )

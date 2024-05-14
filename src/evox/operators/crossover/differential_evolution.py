@@ -46,73 +46,106 @@ class DifferentialEvolve:
     def __call__(self, key, p1, p2, p3):
         return differential_evolve(key, p1, p2, p3, self.F, self.CR)
 
+def move_n_small_numbers(array, n):
+    # Move the first n small numbers in the array to the first n bits of the array and the rest to the back.
+    # The relative order is not changed. n can be a dynamic value.
+    sorted_array = jnp.sort(array)
+    nth_element = sorted_array[n-1]
+
+    condition = array > nth_element
+    sorted_indices = jnp.argsort(condition, kind='stable')
+    moved_array = array[sorted_indices]
+
+    return moved_array, sorted_indices
+
 
 @partial(jit, static_argnames=["diff_padding_num", "replace"])
 def de_diff_sum(
-    key, diff_padding_num, num_diff_vects, index, population, replace=False
+    key, diff_padding_num, num_diff_vects, index, population, pop_size_reduced=None, replace=False
 ):
     pop_size, dim = population.shape
-    subtrahend_index = jnp.arange(1, diff_padding_num, 2)
 
-    """Make differences and sum"""
+    if pop_size_reduced is None:
+        pop_size_fixed = pop_size
+    else:
+        pop_size_fixed = pop_size_reduced
+
+    """Make differences' indices'"""
     # Randomly select 1 random individual (first index) and (num_diff_vects * 2) difference individuals
-    select_len = num_diff_vects * 2 + 1
-    random_choice = jax.random.choice(
-        key, pop_size, shape=(diff_padding_num,), replace=replace
-    )
+    permut = jax.random.choice(key, pop_size, shape=(pop_size,), replace=replace)
+    moved_array, _moved_ids = move_n_small_numbers(permut, pop_size_fixed)
+    random_choice = moved_array[0: diff_padding_num]
+
     random_choice = jnp.where(
-        random_choice == index, pop_size - 1, random_choice
+        random_choice == index, pop_size_fixed - 1, random_choice
     )  # Ensure that selected indices != index
 
-    # Permutate indices, take the first select_len individuals of indices in the population, and set the next individuals to 0
+    """Padding: Take the first select_len individuals in the population, and set the rest individuals to 0"""
     pop_permut = population[random_choice]
+    select_len = num_diff_vects * 2 + 1
     permut_mask = jnp.arange(diff_padding_num) < select_len
     pop_permut_padding = jnp.where(permut_mask[:, jnp.newaxis], pop_permut, 0)
 
-    # Calculate the difference
+    """Make difference"""
     diff_vects = pop_permut_padding[1:, :]
-    difference_sum = jnp.sum(diff_vects.at[subtrahend_index, :].multiply(-1), axis=0)
+    subtrahend_ids = jnp.arange(1, diff_padding_num, 2)
+    difference_sum = jnp.sum(diff_vects.at[subtrahend_ids, :].multiply(-1), axis=0)
 
     rand_vect_idx = random_choice[0]
     return difference_sum, rand_vect_idx
 
 @partial(jit, static_argnames=["diff_padding_num", "num_diff_vects", "replace"])
 def de_diff_sum_archive(
-    key, diff_padding_num, num_diff_vects, index, population, archive, replace=False
+    key, diff_padding_num, num_diff_vects, index, population, archive, pop_size_reduced=None, replace=False
 ):
     pop_size, dim = population.shape
+    if pop_size_reduced is None:
+        pop_size_fixed = pop_size
+    else:
+        pop_size_fixed = pop_size_reduced
 
     """Make differences' indices'"""
     # Randomly select 1 random individual (first index) and (num_diff_vects * 2) difference individuals' indices
     key_select, key_archive = jax.random.split(key)
     population_archive = jnp.vstack((population, archive))
 
-    subtrahend_ids = jax.random.choice(
-        key_select, 2 * pop_size, shape=(diff_padding_num,), replace=replace
-    )
+    # Move nan to the last position in population_archive
+    isnan_in_pop_arc = jnp.isnan(jnp.sum(population_archive, axis=1))
+    _moved_array, sorted_indices = move_n_small_numbers(isnan_in_pop_arc, pop_size_fixed*2)
+    population_archive_moved = population_archive[sorted_indices]
+    
+    # select indices from [0 - 2*pop_szie) as subtrahend
 
-    base_ids = jax.random.choice(
-        key_select, pop_size, shape=(diff_padding_num,), replace=replace
-    )
+    permut_subtrahend = jax.random.choice(key, pop_size*2, shape=(pop_size*2,), replace=replace)
+    moved_array_subtrahend, _moved_ids = move_n_small_numbers(permut_subtrahend, pop_size_fixed*2)
+    base_subtrahend_ids = moved_array_subtrahend[0: diff_padding_num]
+    
+    # select indices from [0 - 2*pop_szie) as minuend, and the subtrahend part ([2, 4, 6, 8]) will be repalced by subtrahend_ids
+
+    permut_base = jax.random.choice(key, pop_size, shape=(pop_size,), replace=replace)
+    moved_array_base, _moved_ids = move_n_small_numbers(permut_base, pop_size_fixed)
+    base_ids = moved_array_base[0: diff_padding_num]
 
     even_ids = jnp.arange(2, diff_padding_num, 2)
-    diff_member_ids = base_ids.at[even_ids].set(subtrahend_ids[even_ids])
+    diff_member_ids = base_ids.at[even_ids].set(base_subtrahend_ids[even_ids])
 
     diff_member_ids = jnp.where(
-        diff_member_ids == index, pop_size - 1, diff_member_ids
+        diff_member_ids == index, pop_size_fixed - 1, diff_member_ids
     )  # Ensure that selected indices != index
 
-    # Permutate indices, take the first select_len individuals of indices in the population, and set the next individuals to 0
-    pop_permut = population_archive[diff_member_ids]
+    """Padding: Take the first select_len individuals in the population, and set the rest individuals to 0"""
+    pop_permut = population_archive_moved[diff_member_ids]
     select_len = num_diff_vects * 2 + 1
     permut_mask = jnp.arange(diff_padding_num) < select_len
     pop_permut_padding = jnp.where(permut_mask[:, jnp.newaxis], pop_permut, 0)
 
+    """Make difference"""
     diff_vects = pop_permut_padding[1:, :]
-    subtrahend_ids_2 = jnp.arange(1, diff_padding_num, 2)
-    difference_sum = jnp.sum(diff_vects.at[subtrahend_ids_2, :].multiply(-1), axis=0)
+    subtrahend_ids = jnp.arange(1, diff_padding_num, 2)
+    difference_sum = jnp.sum(diff_vects.at[subtrahend_ids, :].multiply(-1), axis=0)
 
     rand_vect_idx = diff_member_ids[0]
+    
     return difference_sum, rand_vect_idx
 
 
