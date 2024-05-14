@@ -5,4 +5,5 @@ from .sade import SaDE
 from .shade import SHADE
 from .lshade import LSHADE
 from .ilshade import ILSHADE
+from .jso import JSO
 from .ode import ODE
