@@ -149,6 +149,49 @@ def de_diff_sum_archive(
     
     return difference_sum, rand_vect_idx
 
+@partial(jit, static_argnames=["diff_padding_num", "replace"])
+def de_diff_sum_rank(
+    key, diff_padding_num, num_diff_vects, index, population, k_factor, fitness, pop_size_reduced=None, replace=False
+):
+    pop_size, dim = population.shape
+
+    if pop_size_reduced is None:
+        pop_size_fixed = pop_size
+    else:
+        pop_size_fixed = pop_size_reduced
+
+    """Make differences' indices'"""
+    # Randomly select 1 random individual (first index) and (num_diff_vects * 2) difference individuals
+    ids = jnp.arange(pop_size)
+    sorted_indices = jnp.argsort(fitness)
+    ranks = jnp.argsort(sorted_indices)
+
+    rank_w = k_factor * (pop_size - ranks) + 1
+
+    rank_w_s = jnp.sort(rank_w)
+    nth_element = rank_w_s[pop_size-pop_size_reduced]
+    rank_w_zero = jnp.where(rank_w < nth_element, 0, rank_w)
+    p_weights = rank_w_zero / jnp.sum(rank_w_zero)
+
+    random_choice = jax.random.choice(key, ids, shape=(diff_padding_num,), p=p_weights, replace=replace)
+    
+    random_choice = jnp.where(
+        random_choice == index, pop_size_fixed - 1, random_choice
+    )  # Ensure that selected indices != index
+
+    """Padding: Take the first select_len individuals in the population, and set the rest individuals to 0"""
+    pop_permut = population[random_choice]
+    select_len = num_diff_vects * 2 + 1
+    permut_mask = jnp.arange(diff_padding_num) < select_len
+    pop_permut_padding = jnp.where(permut_mask[:, jnp.newaxis], pop_permut, 0)
+
+    """Make difference"""
+    diff_vects = pop_permut_padding[1:, :]
+    subtrahend_ids = jnp.arange(1, diff_padding_num, 2)
+    difference_sum = jnp.sum(diff_vects.at[subtrahend_ids, :].multiply(-1), axis=0)
+
+    rand_vect_idx = random_choice[0]
+    return difference_sum, rand_vect_idx
 
 @jit
 def de_bin_cross(key, mutation_vector, current_vect, CR):

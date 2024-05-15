@@ -28,7 +28,7 @@ class JaDE(Algorithm):
         lb,
         ub,
         pop_size=100,
-        diff_padding_num=9,
+        diff_padding_num=3,
         differential_weight=None,
         cross_probability=None,
         c=0.1,
@@ -101,8 +101,8 @@ class JaDE(Algorithm):
         population = state_inner.population
         fitness = state_inner.fitness
 
-        self.differential_weight = F
-        self.cross_probability = CR
+        differential_weight = F
+        cross_probability = CR
 
         if self.with_archive:
             difference_sum, _rand_vect_idx = de_diff_sum_archive(
@@ -128,17 +128,17 @@ class JaDE(Algorithm):
         base_vector_prim = current_vect
         base_vector_sec = pbest_vect
 
-        base_vector = base_vector_prim + self.differential_weight * (
+        base_vector = base_vector_prim + differential_weight * (
             base_vector_sec - base_vector_prim
         )
 
-        mutation_vector = base_vector + difference_sum * self.differential_weight
+        mutation_vector = base_vector + difference_sum * differential_weight
 
         trial_vector = de_bin_cross(
             crossover_key,
             mutation_vector,
             current_vect,
-            self.cross_probability,
+            cross_probability,
         )
 
         trial_vector = jnp.clip(trial_vector, self.lb, self.ub)

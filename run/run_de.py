@@ -24,7 +24,11 @@ key = jax.random.PRNGKey(42)
 # optimizer =algorithms.de_variants.JaDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 # optimizer =algorithms.de_variants.CoDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 # optimizer =algorithms.de_variants.SHADE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
-optimizer =algorithms.de_variants.LSHADE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
+# optimizer =algorithms.de_variants.LSHADE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
+# optimizer =algorithms.de_variants.ILSHADE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
+# optimizer =algorithms.de_variants.JSO(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
+# optimizer =algorithms.de_variants.LSHADE_RSP(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
+optimizer =algorithms.de_variants.EPSDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 
 def sample_history(num_samples, fit_history):
     fit_history = jnp.array(fit_history)

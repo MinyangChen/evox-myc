@@ -37,7 +37,7 @@ class LSHADE(Algorithm):
         lb,
         ub,
         pop_size=100,
-        diff_padding_num=9,
+        diff_padding_num=3,
         with_archive=1,
         pop_size_min=4,
     ):

@@ -4,8 +4,7 @@ import jax.numpy as jnp
 from evox import Algorithm, jit_class, State
 from evox.operators.selection import select_rand_pbest
 from evox.operators.crossover import (
-    de_diff_sum,
-    de_diff_sum_archive,
+    de_diff_sum_rank,
     move_n_small_numbers,
     de_arith_recom,
     de_bin_cross,
@@ -18,10 +17,10 @@ from jax.experimental.host_callback import id_print
 
 
 @jit_class
-class JSO(Algorithm):
+class LSHADE_RSP(Algorithm):
     """
-    J. Brest, M. S. Maučec and B. Bošković, "Single objective real-parameter optimization: Algorithm jSO," 
-    2017 IEEE Congress on Evolutionary Computation (CEC), Donostia, Spain, 2017, pp. 1311-1318, doi: 10.1109/CEC.2017.7969456."""
+    V. Stanovov, S. Akhmedova and E. Semenkin, "LSHADE Algorithm with Rank-Based Selective Pressure Strategy for Solving CEC 2017 Benchmark Problems," 
+    2018 IEEE Congress on Evolutionary Computation (CEC), Rio de Janeiro, Brazil, 2018, pp. 1-8, doi: 10.1109/CEC.2018.8477977."""
 
     def __init__(
         self,
@@ -29,10 +28,9 @@ class JSO(Algorithm):
         ub,
         pop_size=100,
         diff_padding_num=3,
-        with_archive=1,
         pop_size_min=4,
-        p_max=0.2,
-        p_min=0.1,
+        p_const=0.085,
+        k_factor=3,
     ):
         self.dim = lb.shape[0]
         self.lb = lb
@@ -40,11 +38,10 @@ class JSO(Algorithm):
         self.pop_size = pop_size
         self.diff_padding_num = diff_padding_num
         self.H = 5
-        self.p_min = p_min
-        self.p_max = p_max
+        self.p_const = p_const
+        self.k_factor = k_factor
 
         self.num_diff_vects = 1
-        self.with_archive = with_archive
         self.pop_size_min=pop_size_min
 
     def setup(self, key):
@@ -61,7 +58,7 @@ class JSO(Algorithm):
             best_index=best_index,
             key=state_key,
             trial_vectors=trial_vectors,
-            Memory_F=jnp.full(shape=(self.H,), fill_value=0.5),
+            Memory_F=jnp.full(shape=(self.H,), fill_value=0.3),
             Memory_CR=jnp.full(shape=(self.H,), fill_value=0.8),
             F_vect=jnp.empty(self.pop_size),
             CR_vect=jnp.empty(self.pop_size),
@@ -71,7 +68,7 @@ class JSO(Algorithm):
             pop_size_reduced=self.pop_size,
             worst_solution=population[0],
             progress=0,
-            p=self.p_min
+            p=self.p_const
         )
 
     def ask(self, state):
@@ -92,10 +89,10 @@ class JSO(Algorithm):
         F_vect_temp = jnp.where(F_vect < 0.7, F_vect, 0.7)
         F_vect = lax.select(state.progress < 0.6, F_vect_temp, F_vect)
 
-        # Generare F. Limit F in a specific range
+        # Generare CR. Limit CR in a specific range
         CR_vect = jax.random.normal(CR_key, shape=(self.pop_size,)) * 0.1 + M_CR_vect
         CR_vect = jnp.clip(CR_vect, jnp.zeros(self.pop_size), jnp.ones(self.pop_size))
-
+        
         conditions_CR = [state.progress <= 0.25, (state.progress > 0.25) & (state.progress <= 0.5), state.progress > 0.5]
         values_CR = [0.7, 0.6, 0.0]
         CR_min = jnp.select(conditions_CR, values_CR)
@@ -134,25 +131,17 @@ class JSO(Algorithm):
         differential_weight = F
         cross_probability = CR
 
-        if self.with_archive:
-            difference_sum, _rand_vect_idx = de_diff_sum_archive(
-                select_key,
-                self.diff_padding_num,
-                self.num_diff_vects,
-                index,
-                population,
-                state_inner.archive,
-                pop_size_reduced,
-            )
-        else:
-            difference_sum, rand_vect_idx = de_diff_sum(
-                select_key,
-                self.diff_padding_num,
-                self.num_diff_vects,
-                index,
-                population,
-                pop_size_reduced,
-            )
+
+        difference_sum, _rand_vect_idx = de_diff_sum_rank(
+            select_key,
+            self.diff_padding_num,
+            self.num_diff_vects,
+            index,
+            population,
+            self.k_factor,
+            pop_size_reduced=pop_size_reduced,  
+            fitness=fitness,
+        )
 
         pbest_vect = select_rand_pbest(pbest_key, p, population, fitness)
         current_vect = population[index]
@@ -257,7 +246,7 @@ class JSO(Algorithm):
         pop_size_reduced = pop_size_temp.astype(int)
 
         """Update pbest percent"""
-        p = self.p_min + (self.p_max - self.p_min) * state.progress
+        p = self.p_const + self.p_const * state.progress
 
         return state.update(
             population=moved_population,

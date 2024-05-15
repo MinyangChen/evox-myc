@@ -87,10 +87,12 @@ class CoDE(Algorithm):
         param_ids = vmap(
             partial(jax.random.choice, a=3, shape=(self.batch_size,), replace=True)
         )(param_keys)
+
         trial_vectors = vmap(
             vmap(partial(self._ask_one, state), in_axes=(None, 0, 0, 0)),
             in_axes=(0, 0, None, 0),
         )(self.strategies, ask_one_keys, indices, param_ids)
+
         trial_vectors = trial_vectors.reshape(3*self.batch_size, -1)
 
         return trial_vectors, state.update(trial_vectors=trial_vectors, key=key)
@@ -119,6 +121,7 @@ class CoDE(Algorithm):
             self.replace,
         )
 
+        # Integrate all base_vect
         rand_vect = population[rand_vect_idx]
         best_vect = population[best_index]
         pbest_vect = select_rand_pbest(pbest_key, 0.05, population, fitness)

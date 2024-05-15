@@ -5,5 +5,7 @@ from .sade import SaDE
 from .shade import SHADE
 from .lshade import LSHADE
 from .ilshade import ILSHADE
+from .lshade_rsp import LSHADE_RSP
 from .jso import JSO
+from .epsde import EPSDE
 from .ode import ODE
