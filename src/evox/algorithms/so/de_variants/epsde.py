@@ -26,8 +26,6 @@ current2rand_1_bin = jnp.array([3, 0, 1, 0])
 current2rand_1 = jnp.array([0, 0, 1, 2])  # current2rand_1 <==> rand_1_arith
 current2pbest_1_bin = jnp.array([3, 2, 1, 0])
 
-
-
 @jit_class
 class EPSDE(Algorithm):
     """R. Mallipeddi, P.N. Suganthan, Q.K. Pan, M.F. Tasgetiren, Differential evolution algorithm with ensemble of parameters and mutation strategies,
@@ -38,10 +36,9 @@ class EPSDE(Algorithm):
         lb,
         ub,
         pop_size=100,
-        diff_padding_num=3,
+        diff_padding_num=5,
         differential_weight=None,
         cross_probability=None,
-        c=0.1,
         p=0.05,
     ):
         self.dim = lb.shape[0]
@@ -49,7 +46,6 @@ class EPSDE(Algorithm):
         self.ub = ub
         self.pop_size = pop_size
         self.diff_padding_num = diff_padding_num
-        self.c = c
 
         self.cross_probability = cross_probability
         self.differential_weight = differential_weight
