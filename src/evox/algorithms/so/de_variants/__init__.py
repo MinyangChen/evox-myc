@@ -8,4 +8,5 @@ from .ilshade import ILSHADE
 from .lshade_rsp import LSHADE_RSP
 from .jso import JSO
 from .epsde import EPSDE
+from .evde import EVDE
 from .ode import ODE

@@ -14,7 +14,7 @@ D = 20
 steps = 9999999
 pop_size = 100
 # key_start = 42
-runs = 2 # number of independent runs. should be an even number
+runs = 32 # number of independent runs. should be an even number
 max_time = 60   ## 60
 num_samples = 100 # history sample num
 key = jax.random.PRNGKey(42)
@@ -28,7 +28,8 @@ key = jax.random.PRNGKey(42)
 # optimizer =algorithms.de_variants.ILSHADE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 # optimizer =algorithms.de_variants.JSO(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 # optimizer =algorithms.de_variants.LSHADE_RSP(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
-optimizer =algorithms.de_variants.EPSDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
+# optimizer =algorithms.de_variants.EPSDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
+optimizer =algorithms.de_variants.EVDE(lb=jnp.full(shape=(D,), fill_value=-100), ub=jnp.full(shape=(D,), fill_value=100), pop_size=pop_size, )
 
 def sample_history(num_samples, fit_history):
     fit_history = jnp.array(fit_history)
@@ -77,7 +78,7 @@ for func_num in func_list:
         # run the pipeline for 100 steps
         for i in range(steps):
             state = workflow.step(state)
-            steps_iter = i + 1
+            steps_iter = i
 
             bestfit_step = monitor.get_best_fitness().item() # record best fitness history
             bestfit_history.append(bestfit_step)
@@ -89,7 +90,7 @@ for func_num in func_list:
             # Update progress into algorithm
             progress = elapsed_time / max_time
             alg_state = state.get_child_state("algorithm")
-            alg_state = alg_state.update(progress=progress)
+            alg_state = alg_state.update(progress=progress, iter=steps_iter)
             state = state.update_child("algorithm", alg_state) 
             if elapsed_time >= max_time:
                 break
